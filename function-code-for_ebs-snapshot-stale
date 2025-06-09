@@ -1,0 +1,75 @@
+import boto3
+
+ec2 = boto3.client('ec2')
+
+def lambda_handler(event, context):
+    # Step 1: Get running EC2 instance IDs
+    running_instances = ec2.describe_instances(
+        Filters=[{'Name': 'instance-state-name', 'Values': ['running']}]
+    )
+    running_instance_ids = set()
+    for reservation in running_instances['Reservations']:
+        for instance in reservation['Instances']:
+            running_instance_ids.add(instance['InstanceId'])
+
+    print(f"Running EC2 Instances: {running_instance_ids}")
+
+    # Step 2: Check all EBS volumes
+    print("Checking EBS Volumes...")
+    volumes = ec2.describe_volumes()
+    for volume in volumes['Volumes']:
+        volume_id = volume['VolumeId']
+        attached = False
+
+        for attachment in volume.get('Attachments', []):
+            instance_id = attachment.get('InstanceId')
+            if instance_id in running_instance_ids:
+                attached = True
+                break
+
+        if not attached:
+            print(f"Deleting unused volume: {volume_id}")
+            try:
+                ec2.delete_volume(VolumeId=volume_id)
+                print(f"Deleted volume {volume_id}")
+            except Exception as e:
+                print(f"Failed to delete volume {volume_id}: {e}")
+
+    # Step 3: Check all snapshots
+    print("Checking Snapshots...")
+    snapshots = ec2.describe_snapshots(OwnerIds=['self'])
+    for snapshot in snapshots['Snapshots']:
+        snapshot_id = snapshot['SnapshotId']
+        volume_id = snapshot.get('VolumeId')
+
+        if volume_id:
+            try:
+                volume = ec2.describe_volumes(VolumeIds=[volume_id])['Volumes'][0]
+                is_attached_to_running = False
+                for attachment in volume.get('Attachments', []):
+                    if attachment['InstanceId'] in running_instance_ids:
+                        is_attached_to_running = True
+                        break
+
+                if not is_attached_to_running:
+                    try:
+                        ec2.delete_volume(VolumeId=volume_id)
+                        print(f"Deleted volume {volume_id} linked to snapshot")
+                    except Exception as e:
+                        print(f"Volume {volume_id} may already be deleted or error occurred: {e}")
+
+                    try:
+                        ec2.delete_snapshot(SnapshotId=snapshot_id)
+                        print(f"Deleted snapshot {snapshot_id}")
+                    except Exception as e:
+                        print(f"Failed to delete snapshot {snapshot_id}: {e}")
+            except Exception as e:
+                print(f"Could not describe volume {volume_id}: {e}")
+        else:
+            print(f"Snapshot {snapshot_id} has no associated VolumeId.")
+
+    return {
+        'statusCode': 200,
+        'body': 'Volume and snapshot cleanup complete.'
+    }
+
