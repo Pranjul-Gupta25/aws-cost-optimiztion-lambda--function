@@ -35,5 +35,4 @@ cost-optimization-ebs
 ec-2permission-cost 
 ec2-delete-volume 
 
-
-created these policy by own 
+created these policy by create inline policy 
